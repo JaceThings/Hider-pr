@@ -2,15 +2,10 @@
 CC ?= $(shell which clang || echo clang)
 CXX ?= $(shell which clang++ || echo clang++)
 
-# SDK paths with fallback - only evaluate when building, not during install
-ifdef MAKECMDGOALS
-ifneq ($(filter build all compile installER install test,$(MAKECMDGOALS)),)
+# SDK path (override via `make SDKROOT=…`). Resolved unconditionally so that
+# building a target by its file path (e.g. `make build/libHider.dylib`) works —
+# the old goal-name filter left SDKROOT empty for those, breaking the compile.
 SDKROOT ?= $(shell xcrun --show-sdk-path 2>/dev/null || echo /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk)
-endif
-else
-# Default case when no goals specified (make with no arguments = all)
-SDKROOT ?= $(shell xcrun --show-sdk-path 2>/dev/null || echo /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk)
-endif
 
 # Compiler and flags
 # -Werror: treat warnings as errors (strict compilation)
@@ -62,10 +57,17 @@ INSTALL_DIR = /var/ammonia/core/tweaks
 DYLIB_SOURCES = $(SOURCE_DIR)/Hider.m
 DYLIB_OBJECTS = $(DYLIB_SOURCES:%.m=$(BUILD_DIR)/%.o)
 
-APP_SOURCES = $(SOURCE_DIR)/HiderApp.swift $(SOURCE_DIR)/SettingsManager.swift
 APP_NAME = Hider
-APP_BINARY = $(BUILD_DIR)/$(APP_NAME)
 APP_ID = com.aspauldingcode.hider
+APP_BUNDLE = $(BUILD_DIR)/$(APP_NAME).app
+APP_BINARY = $(APP_BUNDLE)/Contents/MacOS/$(APP_NAME)
+CLI_BINARY = $(BUILD_DIR)/hiderctl
+SWIFT_RELEASE_DIR = .build/release
+SWIFT_BUILD_STAMP = $(BUILD_DIR)/.swift-release.stamp
+SWIFT_SOURCES = Package.swift $(shell find Sources src Tests -type f \( -name '*.swift' -o -name '*.c' -o -name '*.h' \))
+SWIFT_BUILD_ENV = CLANG_MODULE_CACHE_PATH=$(CURDIR)/.build/clang-module-cache \
+	SWIFTPM_MODULECACHE_OVERRIDE=$(CURDIR)/.build/swiftpm-module-cache
+SWIFT_BUILD_FLAGS ?= --disable-sandbox -debug-info-format none
 
 # Installation targets
 INSTALL_PATH = $(INSTALL_DIR)/$(DYLIB_NAME)
@@ -89,9 +91,8 @@ DYLIB_FLAGS = -dynamiclib \
               -compatibility_version 1.0.0 \
               -current_version 1.0.0
 
-# Default target - build the dylib and the app
-# Default target - build the dylib and the app binary
-all: $(BUILD_DIR)/$(DYLIB_NAME) $(APP_BINARY)
+# Default target - build the dylib, app bundle, and CLI
+all: $(BUILD_DIR)/$(DYLIB_NAME) $(APP_BUNDLE) $(CLI_BINARY)
 
 # Explicit build target
 compile: all
@@ -116,16 +117,33 @@ $(BUILD_DIR)/$(DYLIB_NAME): $(DYLIB_OBJECTS) | $(BUILD_DIR)
 	@echo "Cleaning intermediate build files..."
 	@find $(BUILD_DIR) -name "*.o" -delete
 	@find $(BUILD_DIR) -type d -empty -delete
-	@echo "Build complete. Only $(DYLIB_NAME) remains in $(BUILD_DIR)/"
+	@echo "Dylib build complete: $@"
 
-# Build SwiftUI App Binary
-$(APP_BINARY): $(APP_SOURCES) $(SOURCE_DIR)/notify_bridge.c $(SOURCE_DIR)/Hider-Bridging-Header.h | $(BUILD_DIR)
-	@echo "Building SwiftUI Binary..."
-	swiftc -sdk $(SDKROOT) -import-objc-header $(SOURCE_DIR)/Hider-Bridging-Header.h \
-		$(APP_SOURCES) $(SOURCE_DIR)/notify_bridge.c \
-		-o $(APP_BINARY) \
-		-emit-executable
-	@echo "App binary build complete: $(APP_BINARY)"
+# Build all Swift targets with SwiftPM.
+$(SWIFT_BUILD_STAMP): $(SWIFT_SOURCES) | $(BUILD_DIR)
+	$(SWIFT_BUILD_ENV) swift build -c release $(SWIFT_BUILD_FLAGS)
+	@touch $@
+
+# Assemble and ad-hoc sign the desktop application bundle.
+$(APP_BUNDLE): $(SWIFT_BUILD_STAMP)
+	@echo "Assembling Hider.app..."
+	@rm -rf $@
+	@mkdir -p $@/Contents/MacOS
+	@cp $(SWIFT_RELEASE_DIR)/HiderApp $(APP_BINARY)
+	@plutil -create xml1 $@/Contents/Info.plist
+	@plutil -insert CFBundleExecutable -string Hider $@/Contents/Info.plist
+	@plutil -insert CFBundleIdentifier -string $(APP_ID) $@/Contents/Info.plist
+	@plutil -insert CFBundleName -string Hider $@/Contents/Info.plist
+	@plutil -insert CFBundlePackageType -string APPL $@/Contents/Info.plist
+	@plutil -insert CFBundleShortVersionString -string 1.0.0 $@/Contents/Info.plist
+	@plutil -insert CFBundleVersion -string 1 $@/Contents/Info.plist
+	@plutil -insert LSMinimumSystemVersion -string 26.0 $@/Contents/Info.plist
+	@plutil -lint $@/Contents/Info.plist
+	@codesign --force --sign - $@
+
+$(CLI_BINARY): $(SWIFT_BUILD_STAMP)
+	@cp $(SWIFT_RELEASE_DIR)/hiderctl $@
+	@chmod 755 $@
 
 # Create installer package
 installER: $(BUILD_DIR)/$(DYLIB_NAME)
@@ -173,6 +191,7 @@ install: all
 	sudo mkdir -p $(BIN_INSTALL_DIR)
 	sudo install -m 755 $(APP_BINARY) $(BIN_INSTALL_DIR)/hider
 	sudo install -m 755 $(APP_BINARY) $(BIN_INSTALL_DIR)/Hider
+	sudo install -m 755 $(CLI_BINARY) $(BIN_INSTALL_DIR)/hiderctl
 	@if [ -f $(WHITELIST_SOURCE) ]; then \
 		sudo cp $(WHITELIST_SOURCE) $(WHITELIST_DEST); \
 		sudo chmod 644 $(WHITELIST_DEST); \
@@ -190,53 +209,13 @@ install: all
 	@echo "Force quitting Dock to reload tweak..."
 	sudo killall -9 Dock 2>/dev/null || true
 
-# Test target that compiles, installs, and kills dock for testing
-test: $(BUILD_DIR)/$(DYLIB_NAME)
-	@echo "Installing dylib for testing..."
-	# Create the target directory.
-	sudo mkdir -p $(INSTALL_DIR)
-	# Install the tweak's dylib where injection takes place.
-	sudo install -m 755 $(BUILD_DIR)/$(DYLIB_NAME) $(INSTALL_DIR)
-	@if [ -f $(WHITELIST_SOURCE) ]; then \
-		sudo cp $(WHITELIST_SOURCE) $(WHITELIST_DEST); \
-		sudo chmod 644 $(WHITELIST_DEST); \
-		echo "Installed $(DYLIB_NAME) and whitelist"; \
-	else \
-		echo "Warning: $(WHITELIST_SOURCE) not found"; \
-		echo "Installed $(DYLIB_NAME)"; \
-	fi
-	@echo "Clearing previous log file..."
-	@rm -f /tmp/hider.log
-	@echo "Force quitting Dock to reload tweak..."
-	killall Dock 2>/dev/null || true
-	@sleep 1
-	@echo "Dock restarted with new tweak loaded"
-	@echo ""
-	@echo "=== Tailing /tmp/hider.log ==="
-	@if [ -f /tmp/hider.log ]; then \
-		echo "Showing existing log content:"; \
-		cat /tmp/hider.log; \
-		echo ""; \
-		echo "Tailing log file (Ctrl+C to stop)..."; \
-		tail -f /tmp/hider.log; \
-	else \
-		echo "Log file not found yet. Waiting 2 seconds and trying again..."; \
-		sleep 2; \
-		if [ -f /tmp/hider.log ]; then \
-			echo "Showing existing log content:"; \
-			cat /tmp/hider.log; \
-			echo ""; \
-			echo "Tailing log file (Ctrl+C to stop)..."; \
-			tail -f /tmp/hider.log; \
-		else \
-			echo "Log file still not found. Dock may not have loaded the tweak yet."; \
-			echo "Check /tmp/hider.log manually or restart Dock again."; \
-		fi \
-	fi
+# Run the non-invasive Swift unit tests. Injection testing remains manual.
+test:
+	$(SWIFT_BUILD_ENV) swift test $(SWIFT_BUILD_FLAGS)
 
 # Clean build files
 clean:
-	@rm -rf $(BUILD_DIR)
+	@rm -rf $(BUILD_DIR) .build
 	@echo "Cleaned build directory"
 
 # Delete installed files
@@ -248,6 +227,7 @@ delete:
 	@sudo rm -f $(INSTALL_PATH)
 	@sudo rm -f $(WHITELIST_DEST)
 	@sudo rm -f $(INSTALL_DIR)/lib$(PROJECT).dylib.blacklist
+	@sudo rm -f $(BIN_INSTALL_DIR)/hider $(BIN_INSTALL_DIR)/Hider $(BIN_INSTALL_DIR)/hiderctl
 	@echo "Deleted $(DYLIB_NAME), whitelist, and launch agent"
 
 # Uninstall
@@ -259,6 +239,7 @@ uninstall:
 	@sudo rm -f $(INSTALL_PATH)
 	@sudo rm -f $(WHITELIST_DEST)
 	@sudo rm -f $(INSTALL_DIR)/lib$(PROJECT).dylib.blacklist
+	@sudo rm -f $(BIN_INSTALL_DIR)/hider $(BIN_INSTALL_DIR)/Hider $(BIN_INSTALL_DIR)/hiderctl
 	@echo "Uninstalled $(DYLIB_NAME), whitelist, and launch agent"
 
 .PHONY: all clean install installER test delete uninstall compile
