@@ -4,7 +4,7 @@ CXX ?= $(shell which clang++ || echo clang++)
 
 # SDK paths with fallback - only evaluate when building, not during install
 ifdef MAKECMDGOALS
-ifneq ($(filter build all compile installER install test,$(MAKECMDGOALS)),)
+ifneq ($(filter build all compile installER install test debug,$(MAKECMDGOALS)),)
 SDKROOT ?= $(shell xcrun --show-sdk-path 2>/dev/null || echo /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk)
 endif
 else
@@ -44,7 +44,10 @@ CFLAGS = -Wall -Wextra -Werror \
     -isysroot $(SDKROOT) \
     -iframework $(SDKROOT)/System/Library/Frameworks \
     -F/System/Library/PrivateFrameworks \
-    -Isrc
+    -Isrc \
+    -I$(SOURCE_DIR)/tweak \
+    -I$(SOURCE_DIR)/hooks \
+    -I$(SOURCE_DIR)/gui
 ARCHS = -arch x86_64 -arch arm64 -arch arm64e
 FRAMEWORK_PATH = $(SDKROOT)/System/Library/Frameworks
 PRIVATE_FRAMEWORK_PATH = $(SDKROOT)/System/Library/PrivateFrameworks
@@ -56,13 +59,20 @@ PROJECT = hider
 DYLIB_NAME = libHider.dylib
 BUILD_DIR = build
 SOURCE_DIR = src
+TWEAK_DIR = $(SOURCE_DIR)/tweak
+HOOKS_DIR = $(SOURCE_DIR)/hooks
+GUI_DIR = $(SOURCE_DIR)/gui
 INSTALL_DIR = /var/ammonia/core/tweaks
 
 # Source files
-DYLIB_SOURCES = $(SOURCE_DIR)/Hider.m
+DYLIB_SOURCES = $(TWEAK_DIR)/Hider.m \
+	$(TWEAK_DIR)/HiderCustomAppDockHider.m \
+	$(TWEAK_DIR)/HiderActions.m \
+	$(HOOKS_DIR)/Hooks.m
 DYLIB_OBJECTS = $(DYLIB_SOURCES:%.m=$(BUILD_DIR)/%.o)
 
-APP_SOURCES = $(SOURCE_DIR)/HiderApp.swift $(SOURCE_DIR)/SettingsManager.swift
+APP_SOURCES = $(GUI_DIR)/HiderApp.swift \
+	$(GUI_DIR)/SettingsManager.swift
 APP_NAME = Hider
 APP_BINARY = $(BUILD_DIR)/$(APP_NAME)
 APP_ID = com.aspauldingcode.hider
@@ -87,7 +97,8 @@ PKG_SCRIPTS = $(BUILD_DIR)/pkg_scripts
 DYLIB_FLAGS = -dynamiclib \
               -install_name @rpath/$(DYLIB_NAME) \
               -compatibility_version 1.0.0 \
-              -current_version 1.0.0
+              -current_version 1.0.0 \
+              -Wl,-dead_strip
 
 # Default target - build the dylib and the app
 # Default target - build the dylib and the app binary
@@ -118,14 +129,18 @@ $(BUILD_DIR)/$(DYLIB_NAME): $(DYLIB_OBJECTS) | $(BUILD_DIR)
 	@find $(BUILD_DIR) -type d -empty -delete
 	@echo "Build complete. Only $(DYLIB_NAME) remains in $(BUILD_DIR)/"
 
-# Build SwiftUI App Binary
-$(APP_BINARY): $(APP_SOURCES) $(SOURCE_DIR)/notify_bridge.c $(SOURCE_DIR)/Hider-Bridging-Header.h | $(BUILD_DIR)
-	@echo "Building SwiftUI Binary..."
-	swiftc -sdk $(SDKROOT) -import-objc-header $(SOURCE_DIR)/Hider-Bridging-Header.h \
-		$(APP_SOURCES) $(SOURCE_DIR)/notify_bridge.c \
+# Swift compiler flags: -O for release optimization, -warnings-as-errors for strict build
+SWIFTFLAGS = -O -warnings-as-errors
+
+# Build menubar agent binary (pure CLI binary, not a .app)
+$(APP_BINARY): $(APP_SOURCES) | $(BUILD_DIR)
+	@echo "Building menubar agent binary..."
+	swiftc -sdk $(SDKROOT) \
+		$(SWIFTFLAGS) \
+		$(APP_SOURCES) \
 		-o $(APP_BINARY) \
 		-emit-executable
-	@echo "App binary build complete: $(APP_BINARY)"
+	@echo "Binary build complete: $(APP_BINARY)"
 
 # Create installer package
 installER: $(BUILD_DIR)/$(DYLIB_NAME)
@@ -169,10 +184,10 @@ install: all
 	sudo mkdir -p $(INSTALL_DIR)
 	# Install the tweak's dylib where injection takes place.
 	sudo install -m 755 $(BUILD_DIR)/$(DYLIB_NAME) $(INSTALL_DIR)
-	@echo "Installing Hider binary to $(BIN_INSTALL_DIR)"
+	@echo "Installing hider binary to $(BIN_INSTALL_DIR)"
 	sudo mkdir -p $(BIN_INSTALL_DIR)
+	sudo rm -f $(BIN_INSTALL_DIR)/Hider
 	sudo install -m 755 $(APP_BINARY) $(BIN_INSTALL_DIR)/hider
-	sudo install -m 755 $(APP_BINARY) $(BIN_INSTALL_DIR)/Hider
 	@if [ -f $(WHITELIST_SOURCE) ]; then \
 		sudo cp $(WHITELIST_SOURCE) $(WHITELIST_DEST); \
 		sudo chmod 644 $(WHITELIST_DEST); \
@@ -189,6 +204,47 @@ install: all
 	@echo "Launch agent installed. Hider will start at login."
 	@echo "Force quitting Dock to reload tweak..."
 	sudo killall -9 Dock 2>/dev/null || true
+
+# Debug: install and attach lldb to Dock for crash analysis
+debug: all
+	@echo "Installing dylib directly to $(INSTALL_DIR)"
+	sudo mkdir -p $(INSTALL_DIR)
+	sudo install -m 755 $(BUILD_DIR)/$(DYLIB_NAME) $(INSTALL_DIR)
+	@echo "Installing hider binary to $(BIN_INSTALL_DIR)"
+	sudo mkdir -p $(BIN_INSTALL_DIR)
+	sudo rm -f $(BIN_INSTALL_DIR)/Hider
+	sudo install -m 755 $(APP_BINARY) $(BIN_INSTALL_DIR)/hider
+	@if [ -f $(WHITELIST_SOURCE) ]; then \
+		sudo cp $(WHITELIST_SOURCE) $(WHITELIST_DEST); \
+		sudo chmod 644 $(WHITELIST_DEST); \
+		echo "Installed $(DYLIB_NAME) and whitelist"; \
+	else \
+		echo "Warning: $(WHITELIST_SOURCE) not found"; \
+		echo "Installed $(DYLIB_NAME)"; \
+	fi
+	@echo "Installing launch agent to $(LAUNCH_AGENT_DEST)"
+	@mkdir -p $(HOME)/Library/LaunchAgents
+	@cp $(LAUNCH_AGENT_PLIST) $(LAUNCH_AGENT_DEST)
+	@launchctl unload $(LAUNCH_AGENT_DEST) 2>/dev/null || true
+	@launchctl load $(LAUNCH_AGENT_DEST)
+	@echo "Launch agent installed."
+	@rm -f /tmp/hider.log
+	@echo ""
+	@echo "=== Attaching lldb to Dock ==="
+	@echo "If Dock hangs, run 'make recover' from another terminal."
+	@echo "On crash, use: bt, bt all, frame variable, register read"
+	@echo ""
+	@(sleep 2 && sudo pkill -KILL Dock) &
+	lldb -n Dock -w -o "continue"
+
+# Emergency recovery: removes dylib, kills lldb, restarts Dock clean
+recover:
+	@echo "Recovering from hung Dock..."
+	-@sudo rm -f $(INSTALL_PATH)
+	-@pkill -9 lldb 2>/dev/null
+	-@sleep 1
+	-@sudo pkill -KILL Dock 2>/dev/null
+	@echo "Done — dylib removed, Dock restarted clean."
 
 # Test target that compiles, installs, and kills dock for testing
 test: $(BUILD_DIR)/$(DYLIB_NAME)
@@ -234,6 +290,21 @@ test: $(BUILD_DIR)/$(DYLIB_NAME)
 		fi \
 	fi
 
+# Trigger runtime dumps from injected Dock tweak.
+dump:
+	@echo "Requesting Dock layer dump..."
+	@notifyutil -p com.hider.dump || true
+	@sleep 1
+	@ls -l /tmp/dock_layer_dump.txt 2>/dev/null || echo "No /tmp/dock_layer_dump.txt yet"
+	@echo "Layer dump path: /tmp/dock_layer_dump.txt"
+
+classdump:
+	@echo "Requesting Dock class dump..."
+	@notifyutil -p com.hider.classdump || true
+	@sleep 1
+	@ls -l /tmp/dock_class_dump.txt 2>/dev/null || echo "No /tmp/dock_class_dump.txt yet"
+	@echo "Class dump path: /tmp/dock_class_dump.txt"
+
 # Clean build files
 clean:
 	@rm -rf $(BUILD_DIR)
@@ -241,27 +312,51 @@ clean:
 
 # Delete installed files
 delete:
-	@echo "Force quitting Dock..."
-	killall Dock 2>/dev/null || true
+	@echo "Deleting installed files..."
 	@launchctl unload $(LAUNCH_AGENT_DEST) 2>/dev/null || true
 	@rm -f $(LAUNCH_AGENT_DEST)
 	@sudo rm -f $(INSTALL_PATH)
 	@sudo rm -f $(WHITELIST_DEST)
 	@sudo rm -f $(INSTALL_DIR)/lib$(PROJECT).dylib.blacklist
-	@echo "Deleted $(DYLIB_NAME), whitelist, and launch agent"
+	@sudo rm -f $(BIN_INSTALL_DIR)/hider
+	@sudo rm -f $(BIN_INSTALL_DIR)/Hider
+	@echo "Deleted $(DYLIB_NAME), hider binary, whitelist, and launch agent"
+	@echo "Restarting Dock..."
+	sudo pkill -KILL Dock 2>/dev/null || true
 
 # Uninstall
 uninstall:
-	@echo "Force quitting Dock..."
-	killall Dock 2>/dev/null || true
+	@echo "Uninstalling..."
 	@launchctl unload $(LAUNCH_AGENT_DEST) 2>/dev/null || true
 	@rm -f $(LAUNCH_AGENT_DEST)
 	@sudo rm -f $(INSTALL_PATH)
 	@sudo rm -f $(WHITELIST_DEST)
 	@sudo rm -f $(INSTALL_DIR)/lib$(PROJECT).dylib.blacklist
-	@echo "Uninstalled $(DYLIB_NAME), whitelist, and launch agent"
+	@sudo rm -f $(BIN_INSTALL_DIR)/hider
+	@sudo rm -f $(BIN_INSTALL_DIR)/Hider
+	@echo "Uninstalled $(DYLIB_NAME), hider binary, whitelist, and launch agent"
+	@echo "Restarting Dock..."
+	sudo pkill -KILL Dock 2>/dev/null || true
 
-.PHONY: all clean install installER test delete uninstall compile
+# Live log tail — run this in a second terminal while `make debug` runs in the first.
+# Usage: open a new terminal, cd to this directory, run `make log`
+log:
+	@echo "=== Hider Live Log (/tmp/hider.log) ==="
+	@echo "Tip: run 'make debug' in another terminal to start testing."
+	@echo "Press Ctrl+C to stop tailing."
+	@echo ""
+	@touch /tmp/hider.log
+	@tail -F /tmp/hider.log
+
+# Clear the log and start a fresh tail (useful when re-running make debug).
+logclean:
+	@echo "Clearing /tmp/hider.log..."
+	@rm -f /tmp/hider.log
+	@touch /tmp/hider.log
+	@echo "Log cleared. Tailing fresh log..."
+	@tail -F /tmp/hider.log
+
+.PHONY: all clean install installER test debug recover delete uninstall compile dump classdump log logclean
 
 
 # verbose test

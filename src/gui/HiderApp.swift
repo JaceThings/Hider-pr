@@ -80,8 +80,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var popover: NSPopover?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApplication.shared.setActivationPolicy(.accessory)
-
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let btn = statusItem?.button {
             btn.image = NSImage(systemSymbolName: "eye.slash.fill", accessibilityDescription: "Hider")
@@ -280,6 +278,37 @@ struct ContentView: View {
                 .padding(.vertical, 8)
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
+
+            Divider()
+
+            VStack(spacing: 6) {
+                Button(action: {
+                    NSWorkspace.shared.open(URL(string: "https://aspauldingcode.com")!)
+                }) {
+                    Text("by Alex Spaulding (aspauldingcode)")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+
+                Button(action: {
+                    NSWorkspace.shared.open(URL(string: "https://ko-fi.com/aspauldingcode")!)
+                }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "heart.fill")
+                            .font(.system(size: 12))
+                        Text("Tip on Ko-fi")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 7)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Color.purple.opacity(0.9)))
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 14)
+            }
+            .padding(.vertical, 8)
 
             Divider()
 
@@ -584,13 +613,17 @@ struct AppPickerRow: View {
     }
 }
 
-// MARK: - HiderApp Entry Point
+// MARK: - Entry Point
+// Pure background binary — no .app bundle, no Dock icon, no Cmd+Tab entry.
+// Runs a raw NSApplication event loop with .accessory policy for the menubar item.
 
 @main
-struct HiderApp: App {
-    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-
-    var body: some Scene {
-        Settings { EmptyView() }
+enum HiderMain {
+    static func main() {
+        let app = NSApplication.shared
+        app.setActivationPolicy(.accessory)
+        let delegate = AppDelegate()
+        app.delegate = delegate
+        app.run()
     }
 }
