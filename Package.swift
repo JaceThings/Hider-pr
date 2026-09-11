@@ -5,11 +5,9 @@ import PackageDescription
 let package = Package(
     name: "Hider",
     platforms: [
-        // Build against the macOS 26 (Tahoe) SDK so the app gets the native
-        // Liquid Glass appearance. macOS gates the new look on the linked SDK
-        // version, not the OS at runtime — an older deployment target renders the
-        // legacy (pre-Tahoe) controls even when run on 26/27.
-        .macOS(.v26),
+        // Sequoia is the floor — Plugin Playground's supported range.
+        // Building with a newer SDK still unlocks Liquid Glass on Tahoe+.
+        .macOS(.v15),
     ],
     products: [
         .library(name: "HiderCore", targets: ["HiderCore"]),
@@ -27,6 +25,8 @@ let package = Package(
                 "SettingsManager.swift",
                 "ZKSwizzle",
                 "tweak.h",
+                "caribbean.m",
+                "coredock.h",
             ],
             sources: ["notify_bridge.c"],
             publicHeadersPath: "include"
@@ -50,11 +50,12 @@ let package = Package(
                 "notify_bridge.c",
                 "include",
                 "tweak.h",
+                "caribbean.m",
+                "coredock.h",
             ],
             sources: ["HiderApp.swift", "SettingsManager.swift"],
             linkerSettings: [
                 .linkedFramework("AppKit"),
-                .linkedFramework("SwiftUI"),
             ]
         ),
         .executableTarget(
@@ -68,21 +69,7 @@ let package = Package(
         .testTarget(
             name: "HiderCoreTests",
             dependencies: ["HiderCore"],
-            path: "Tests/HiderCoreTests",
-            swiftSettings: [
-                .unsafeFlags([
-                    "-plugin-path",
-                    "/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing",
-                ]),
-            ],
-            linkerSettings: [
-                .unsafeFlags([
-                    "-Xlinker", "-rpath",
-                    "-Xlinker", "/Library/Developer/CommandLineTools/Library/Developer/Frameworks",
-                    "-Xlinker", "-rpath",
-                    "-Xlinker", "/Library/Developer/CommandLineTools/Library/Developer/usr/lib",
-                ]),
-            ]
+            path: "Tests/HiderCoreTests"
         ),
     ],
     swiftLanguageModes: [.v5]

@@ -37,7 +37,7 @@ Only out-of-range values change, so inserts on the normal path are untouched.
 A tile is built only during layout, so toggling the hidden list while the Dock is running does not remove a tile that is already on screen. To apply a change, the app and CLI restart the Dock:
 
 ```sh
-killall Dock   # launchd relaunches it in ~2s; Ammonia re-injects; the rebuild hides the app
+killall Dock   # launchd relaunches it in ~2s; Plugin Playground reloads the dylib; the rebuild hides the app
 ```
 
 The app drives this for you:

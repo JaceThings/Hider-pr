@@ -4,11 +4,12 @@ The parts that make up Hider and how they talk to each other.
 
 | Component | Role |
 |-----------|------|
-| `src/Hider.m` | ObjC dylib, built to `build/libHider.dylib`. Ammonia injects it into `com.apple.dock`. It swizzles private DockCore classes; all Dock manipulation happens here. |
-| [Ammonia](https://github.com/CoreBedtime/ammonia) | The injector. Loads every dylib in `/var/ammonia/core/tweaks/`. Requires SIP off and the `-arm64e_preview_abi` boot-arg. |
+| `src/Hider.m` | ObjC dylib → `build/libHider.dylib`. Injected into `com.apple.dock`. Swizzles private DockCore classes; all Dock manipulation happens here. |
+| [Plugin Playground](https://github.com/CoreBedtime/playground) | Sole injector (macOS Sequoia 15 → latest). Loads `/opt/pluginplayground/tweaks/*.dylib`. Hider ships `libHider.dylib.whitelist`, `libHider.dylib.options`, and enables `disablePAC` in `/opt/pluginplayground/current.options` for stock `arm64` fangs. |
 | `Hider.app` | SwiftUI settings app. Writes preferences and restarts the Dock. It never edits the Dock directly. |
 | `hiderctl` | CLI over the same preferences. |
 | `HiderCore` | Swift library shared by the app and CLI: the config model and the preferences store. |
+| `hider-installer.pkg` | `make installER` — installs the tweak, app, CLI, and LaunchAgent for any PP-supported macOS. |
 
 The app and CLI write the preferences domain, then post a Darwin notification. The dylib reads the preferences and reacts.
 

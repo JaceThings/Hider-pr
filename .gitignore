@@ -77,3 +77,6 @@ yarn-error.log*
 
 # Packages
 *.pkg
+
+# Local reverse-engineering copies of system binaries
+.re/

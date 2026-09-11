@@ -56,17 +56,26 @@ struct HiderCLI {
     private func printStatus() {
         let config = store.currentConfig()
         let fileManager = FileManager.default
+        let major = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
+        let ppRoot = "/opt/pluginplayground"
+        let ppDylib = "\(ppRoot)/tweaks/libHider.dylib"
+        let ppOptions = "\(ppRoot)/tweaks/libHider.dylib.options"
+
         print("Finder: \(config.hideFinder ? "hidden" : "shown")")
         print("Trash: \(config.hideTrash ? "hidden" : "shown")")
+        print("Separators: \(config.hideSeparators ? "hidden" : "shown")")
+        print("Running-app hiding: \(config.hideRunningApps ? "on" : "off")")
         print("Hidden apps:")
         if config.hiddenApps.isEmpty {
             print("  (none)")
         } else {
             config.hiddenApps.forEach { print("  \($0)") }
         }
-        print("Ammonia installed: \(yesNo(fileManager.fileExists(atPath: "/var/ammonia")))")
-        print("Hider tweak installed: \(yesNo(fileManager.fileExists(atPath: "/var/ammonia/core/tweaks/libHider.dylib")))")
-        print("Live Dock hiding requires SIP to be disabled and Ammonia to be installed.")
+        print("macOS: \(major) (requires Sequoia 15+)")
+        print("Plugin Playground: \(yesNo(fileManager.fileExists(atPath: ppRoot)))")
+        print("Hider tweak: \(yesNo(fileManager.fileExists(atPath: ppDylib))) (\(ppDylib))")
+        print("Hider options: \(yesNo(fileManager.fileExists(atPath: ppOptions)))")
+        print("Live Dock hiding needs SIP off and Plugin Playground.")
     }
 
     private func printList() {

@@ -8,47 +8,40 @@ Running apps are the hard case — macOS has no API for changing the Dock — so
 
 ## Requirements
 
-- Apple Silicon Mac, macOS 26 or 27.
-- **SIP disabled.** macOS has no API for modifying the Dock; the only way in is injecting code into the Dock process, which SIP blocks. Real trade-off — use a machine you don't mind tinkering with. Reversible (see [Uninstall](#uninstall)).
-- **[Ammonia](https://github.com/CoreBedtime/ammonia)** — the tweak loader that injects Hider into the Dock.
+- Apple Silicon Mac.
+- **macOS Sequoia 15 → latest** (Tahoe and newer included).
+- **SIP disabled.** Injecting into Dock is blocked otherwise.
+- **[Plugin Playground](https://github.com/CoreBedtime/playground)** — the only supported injector. Tweaks live in `/opt/pluginplayground/tweaks`.
+
+Ammonia is not supported going forward.
 
 ## Install
-
-In order; steps 2–4 each reboot.
 
 **1. Command Line Tools** (for `make`):
 ```sh
 xcode-select --install
 ```
 
-**2. Disable SIP** — only possible from Recovery. Shut down, hold the power button until "Loading startup options," then Options → Continue → Utilities → Terminal:
+**2. Disable SIP** from Recovery:
 ```sh
 csrutil disable
 ```
 Restart into macOS.
 
-**3. Enable the arm64e preview ABI** (Ammonia ships `arm64e` code that needs it):
-```sh
-sudo nvram boot-args=-arm64e_preview_abi   # keep existing args if you have any
-sudo reboot
-```
+**3. Install Plugin Playground** from [CoreBedtime/playground](https://github.com/CoreBedtime/playground). See the [Playground docs](https://github.com/CoreBedtime/playground/tree/master/docs) for PAC stripping (`disablePAC`) if your fangs build is plain `arm64`.
 
-**4. Install Ammonia:**
+**4. Install Hider** — either from source or the `.pkg`:
 ```sh
-curl -L -o /tmp/ammonia.pkg \
-  https://github.com/CoreBedtime/ammonia/releases/download/1.5/ammonia.pkg
-sudo installer -pkg /tmp/ammonia.pkg -target /
+make install      # builds + installs into Plugin Playground
+# or
+make installER    # builds hider-installer.pkg for Sequoia → latest
+sudo installer -pkg hider-installer.pkg -target /
 ```
-
-**5. Install Hider:**
-```sh
-make install   # or `make all` to build without sudo
-```
-Builds the dylib into Ammonia's tweaks folder, installs `Hider.app` and `hiderctl`, and restarts the Dock. Open `Hider.app` and hide something to confirm.
+Both paths install `libHider.dylib` (+ whitelist / options) into `/opt/pluginplayground/tweaks`, `Hider.app`, `hiderctl`, enable `disablePAC`, and restart the Dock. Open `Hider.app` and hide something to confirm.
 
 ## App
 
-Two panes: **Dock Items** (Finder, Trash, separator, and the running-apps master switch) and **Applications** (hidden apps, currently-running apps, and search). Changes auto-apply — running-app hiding needs a Dock rebuild, so ~1s after you stop toggling the Dock refreshes once. Rapid toggling can't wedge it; bursts collapse into one rate-limited relaunch.
+Menubar applet (`NSStatusItem` + `NSMenu`): toggle Finder / Trash / separators / running-app hiding, hide or unhide running apps, restart the Dock, or open the declarative config. Changes auto-apply — running-app hiding needs a Dock rebuild, so ~1s after you stop toggling the Dock refreshes once.
 
 ## CLI
 
@@ -71,7 +64,7 @@ The injected dylib (`src/Hider.m`) hooks DockCore. For a hidden running app it r
 
 Running-app hiding is off by default and fails safe. If the Dock won't appear:
 ```sh
-mv /var/ammonia/core/tweaks/libHider.dylib /tmp/
+sudo mv /opt/pluginplayground/tweaks/libHider.dylib /tmp/
 launchctl kickstart gui/$(id -u)/com.apple.Dock.agent
 ```
 Never `kickstart -k` — it can wedge the injector. A reboot clears leftover state.
@@ -80,16 +73,14 @@ Never `kickstart -k` — it can wedge the injector. A reboot clears leftover sta
 
 ```sh
 make uninstall
-sudo nvram -d boot-args
 ```
-Then re-enable SIP from Recovery: `csrutil enable`. Ammonia can stay or go.
 
 ## Credits
 
 - Created by **Alex Spaulding** (@aspauldingcode).
 - Running-app hiding, `Hider.app`, and `hiderctl` by **Jace** (@JaceThings).
 - Dock tile rendering fix by **Salty** (@ogui-775).
-- Built on [Ammonia](https://github.com/CoreBedtime/ammonia) by CoreBedtime.
+- Injector: [Plugin Playground](https://github.com/CoreBedtime/playground) by CoreBedtime.
 
 ## License
 

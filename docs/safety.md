@@ -9,14 +9,14 @@ Running-app hiding edits a live system process, so it is off by default and wrap
 
 ## Manual recovery
 
-If the Dock stays down, move the dylib out of the tweaks folder, reload Ammonia, and relaunch the Dock:
+If the Dock stays down, move the dylib out of the Plugin Playground tweaks folder and relaunch the Dock:
 
 ```sh
-mv /var/ammonia/core/tweaks/libHider.dylib /tmp/
+sudo mv /opt/pluginplayground/tweaks/libHider.dylib /tmp/
 launchctl kickstart gui/$(id -u)/com.apple.Dock.agent
 ```
 
-Never use `kickstart -k`; combined with rapid Ammonia reloads it can wedge launchd until a reboot. To disable the feature without removing the dylib:
+Never use `kickstart -k`; combined with rapid injector reloads it can wedge launchd until a reboot. To disable the feature without removing the dylib:
 
 ```sh
 defaults write com.aspauldingcode.hider hideRunningApps -bool NO
